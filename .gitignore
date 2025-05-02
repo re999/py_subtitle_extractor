@@ -11,3 +11,5 @@
 *.txt
 *.log
 build/
+dist/
+__pycache__/
