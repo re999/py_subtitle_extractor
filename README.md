@@ -63,6 +63,18 @@ print(srt_text)
 
 ---
 
+## 🖥️ CLI Usage
+
+```bash
+# List available subtitle tracks via CLI
+python -m py_subtitle_extractor movie.mkv
+
+# Extract full SRT from track #3
+python -m py_subtitle_extractor movie.mkv -t 3 > subs.srt
+```
+
+---
+
 ## 📂 Bundling in a Kodi Add-on
 
 Kodi auto-includes `resources/lib` in its Python path. To vendor the library:
