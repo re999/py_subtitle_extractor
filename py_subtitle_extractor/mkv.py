@@ -1,5 +1,5 @@
-from .ebml import read_id, read_size
-from io import BytesIO
+from .ebml import read_id, read_size, read_vint
+from typing import List, Tuple
 
 SEGMENT_ID      = 0x18538067
 TRACKS_ID       = 0x1654AE6B
@@ -14,99 +14,110 @@ BLOCKGROUP_ID   = 0xA0
 BLOCK_ID        = 0xA1
 
 def _read_header(f):
-    eid,_  = read_id(f)
-    size,_ = read_size(f)
-    return eid,size
+    eid, _ = read_id(f)
+    sz,  _ = read_size(f)
+    return eid, sz
 
-def extract_subtitle_tracks(path):
-    with open(path,'rb') as f:
-        _,sz=_read_header(f); f.seek(sz,1)
-        eid,sz=_read_header(f)
-        if eid!=SEGMENT_ID: return []
-        end=f.tell()+sz
-        while f.tell()<end:
-            eid,sz=_read_header(f)
-            if eid==TRACKS_ID:
-                data=f.read(sz)
-                return [i for i in _parse_tracks(data) if i['type']==0x11]
-            f.seek(sz,1)
-    return []
+def extract_subtitle_tracks(path: str) -> List[dict]:
+    from io import BytesIO
+    out = []
+    with open(path, "rb") as f:
+        _, sz = _read_header(f); f.seek(sz, 1)
+        eid, sz = _read_header(f)
+        if eid != SEGMENT_ID:
+            return []
+        seg_end = f.tell() + sz
+        while f.tell() < seg_end:
+            eid, sz = _read_header(f)
+            if eid == TRACKS_ID:
+                data = f.read(sz)
+                out = _parse_tracks(data)
+                break
+            f.seek(sz, 1)
+    return [t for t in out if t["type"] == 0x11]
 
-def extract_subtitles(path,track):
-    out=[]
-    with open(path,'rb') as f:
-        _,sz=_read_header(f); f.seek(sz,1)
-        eid,sz=_read_header(f)
-        if eid!=SEGMENT_ID: return []
-        end=f.tell()+sz
-        while f.tell()<end:
-            eid,sz=_read_header(f)
-            if eid==CLUSTER_ID:
-                buf=BytesIO(f.read(sz))
-                base=_cluster_time(buf)
-                out+=_parse_simpleblocks(buf,base,track)
-            else:
-                f.seek(sz,1)
-    return out
+def extract_subtitles(path: str, track: int) -> List[Tuple[int, str]]:
+    subs: List[Tuple[int, str]] = []
+    with open(path, "rb") as f:
+        # skip EBML header + go into Segment
+        _, sz = _read_header(f); f.seek(sz, 1)
+        eid, sz = _read_header(f)
+        if eid != SEGMENT_ID:
+            return subs
+        seg_end = f.tell() + sz
 
-def _parse_tracks(data):
-    buf=BytesIO(data)
-    out=[]
+        # streaming po klastrach
+        while f.tell() < seg_end:
+            eid, sz = _read_header(f)
+            if eid != CLUSTER_ID:
+                f.seek(sz, 1)
+                continue
+            cluster_end = f.tell() + sz
+            cluster_time = 0
+
+            # parsujemy elementy klastra w jednym przebiegu
+            while f.tell() < cluster_end:
+                eid2, sz2 = _read_header(f)
+                if eid2 == TIMECODE_ID:
+                    cluster_time = int.from_bytes(f.read(sz2), "big")
+                elif eid2 == SIMPLEBLOCK_ID:
+                    trk, vlen = read_vint(f)
+                    t = int.from_bytes(f.read(2), "big", signed=True)
+                    f.read(1)
+                    payload_len = sz2 - vlen - 3
+                    if trk == track:
+                        txt = f.read(payload_len).decode("utf-8", "ignore").strip()
+                        subs.append((cluster_time + t, txt))
+                    else:
+                        f.seek(payload_len, 1)
+                elif eid2 == BLOCKGROUP_ID:
+                    group_end = f.tell() + sz2
+                    while f.tell() < group_end:
+                        eid3, sz3 = _read_header(f)
+                        if eid3 == BLOCK_ID:
+                            trk, vlen = read_vint(f)
+                            t = int.from_bytes(f.read(2), "big", signed=True)
+                            f.read(1)
+                            payload_len = sz3 - vlen - 3
+                            if trk == track:
+                                txt = f.read(payload_len).decode("utf-8", "ignore").strip()
+                                subs.append((cluster_time + t, txt))
+                            else:
+                                f.seek(payload_len, 1)
+                        else:
+                            f.seek(sz3, 1)
+                else:
+                    f.seek(sz2, 1)
+    return subs
+
+def _parse_tracks(data: bytes) -> List[dict]:
+    from io import BytesIO
+    buf = BytesIO(data)
+    out = []
     while True:
-        try: eid,sz=_read_header(buf)
-        except EOFError: break
-        chunk=buf.read(sz)
-        if eid==TRACKENTRY_ID:
+        try:
+            eid, sz = _read_header(buf)
+        except EOFError:
+            break
+        chunk = buf.read(sz)
+        if eid == TRACKENTRY_ID:
             out.append(_parse_track_entry(chunk))
     return out
 
-def _parse_track_entry(data):
-    buf=BytesIO(data)
-    info={'type':0,'track_number':0,'codec_id':''}
-    while True:
-        try: eid,sz=_read_header(buf)
-        except EOFError: break
-        v=buf.read(sz)
-        if eid==TRACKTYPE_ID:    info['type']=v[0]
-        if eid==TRACKNUMBER_ID:  info['track_number']=int.from_bytes(v,'big')
-        if eid==CODECID_ID:      info['codec_id']=v.decode('ascii','ignore')
-    return info
-
-def _cluster_time(buf):
-    while True:
-        try: eid,sz=_read_header(buf)
-        except EOFError: return 0
-        v=buf.read(sz)
-        if eid==TIMECODE_ID:
-            return int.from_bytes(v,'big')
-
-def _parse_simpleblocks(buf,base,track):
-    out=[]
-    while True:
-        try: eid,sz=_read_header(buf)
-        except EOFError: break
-        data=buf.read(sz)
-        blocks=([data] if eid==SIMPLEBLOCK_ID else _extract_blocks_from_group(data) if eid==BLOCKGROUP_ID else [])
-        for b in blocks:
-            bb=BytesIO(b)
-            trk,_=read_size(bb)
-            t=int.from_bytes(bb.read(2),'big',signed=True)
-            bb.read(1)
-            text=bb.read().decode('utf-8','ignore').strip()
-            if trk==track:
-                out.append((base+t,text))
-    return out
-
-def _extract_blocks_from_group(data):
-    out=[]
-    buf=BytesIO(data)
+def _parse_track_entry(data: bytes) -> dict:
+    from io import BytesIO
+    buf = BytesIO(data)
+    info = {"type": 0, "track_number": 0, "codec_id": ""}
     while True:
         try:
-            eid,_=read_id(buf)
-            sz,_=read_size(buf)
+            eid, sz = _read_header(buf)
         except EOFError:
             break
-        chunk=buf.read(sz)
-        if eid==BLOCK_ID:
-            out.append(chunk)
-    return out
+        v = buf.read(sz)
+        if eid == TRACKTYPE_ID:
+            info["type"] = v[0]
+        if eid == TRACKNUMBER_ID:
+            info["track_number"] = int.from_bytes(v, "big")
+        if eid == CODECID_ID:
+            info["codec_id"] = v.decode("ascii", "ignore")
+    return info
