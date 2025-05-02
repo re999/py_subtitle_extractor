@@ -1,3 +1,8 @@
 # py_subtitle_extractor
 
-Extract subtitles from video containers using pure Python.
+Pure-Python MKV subtitle extractor library.
+
+## Installation
+
+```bash
+pip install py_subtitle_extractor
