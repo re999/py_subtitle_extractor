@@ -1,5 +1,6 @@
 from .ebml import read_id, read_size, read_vint
 from typing import List, Tuple, BinaryIO
+import mmap
 
 SEGMENT    = 0x18538067
 TRACKS     = 0x1654AE6B
@@ -67,18 +68,19 @@ def _parse_track_entry(data: bytes) -> dict:
 
 def extract_subtitles(path: str, track: int) -> List[Tuple[int, str] | Tuple[int, str, int]]:
     subs=[]
-    with open(path,"rb") as f:
-        _, h = _read_header(f); f.seek(h,1)
-        eid, h = _read_header(f)
-        if eid!=SEGMENT:
-            return subs
-        seg_end=f.tell()+h
-        while f.tell()<seg_end:
-            eid, sz = _read_header(f)
-            if eid==CLUSTER:
-                subs+=_parse_cluster(f,sz,track)
-            else:
-                f.seek(sz,1)
+    with open(path, "rb") as file:
+        with mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ) as f:
+            _, h = _read_header(f); f.seek(h,1)
+            eid, h = _read_header(f)
+            if eid!=SEGMENT:
+                return subs
+            seg_end=f.tell()+h
+            while f.tell()<seg_end:
+                eid, sz = _read_header(f)
+                if eid==CLUSTER:
+                    subs+=_parse_cluster(f,sz,track)
+                else:
+                    f.seek(sz,1)
     return subs
 
 def _parse_cluster(f: BinaryIO, size: int, track: int) -> List[Tuple[int, str] | Tuple[int, str, int]]:
