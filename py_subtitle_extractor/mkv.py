@@ -15,6 +15,7 @@ TIMECODE   = 0xE7
 SIMPLEBLK  = 0xA3
 BLKGROUP   = 0xA0
 BLOCK      = 0xA1
+BLOCKDUR   = 0x9B
 
 def _read_header(f: BinaryIO) -> Tuple[int,int]:
     eid,_ = read_id(f)
@@ -64,7 +65,7 @@ def _parse_track_entry(data: bytes) -> dict:
         elif eid==TRACKNAME:   info["name"]=v.decode("utf-8","ignore")
     return info
 
-def extract_subtitles(path: str, track: int) -> List[Tuple[int,str]]:
+def extract_subtitles(path: str, track: int) -> List[Tuple[int, str] | Tuple[int, str, int]]:
     subs=[]
     with open(path,"rb") as f:
         _, h = _read_header(f); f.seek(h,1)
@@ -80,7 +81,7 @@ def extract_subtitles(path: str, track: int) -> List[Tuple[int,str]]:
                 f.seek(sz,1)
     return subs
 
-def _parse_cluster(f: BinaryIO, size: int, track: int) -> List[Tuple[int,str]]:
+def _parse_cluster(f: BinaryIO, size: int, track: int) -> List[Tuple[int, str] | Tuple[int, str, int]]:
     end=f.tell()+size
     base=_read_cluster_time(f,end)
     out=[]
@@ -113,12 +114,30 @@ def _handle_block(f: BinaryIO, sz: int, base: int, track: int) -> List[Tuple[int
     f.seek(plen,1)
     return []
 
-def _handle_group(f: BinaryIO, sz: int, base: int, track: int) -> List[Tuple[int,str]]:
-    end=f.tell()+sz; out=[]
+def _handle_group(f: BinaryIO, sz: int, base: int, track: int) -> List[Tuple[int,str] | Tuple[int,str,int]]:
+    end=f.tell()+sz
+    txt = None
+    t_rel = None
+    duration = None
     while f.tell()<end:
         eid,s = _read_header(f)
         if eid==BLOCK:
-            out+=_handle_block(f,s,base,track)
+            pos = f.tell()
+            trk,vlen=read_vint(f)
+            t_rel=int.from_bytes(f.read(2),"big",signed=True)
+            f.read(1)
+            plen=s-vlen-3
+            if trk==track:
+                txt=f.read(plen).decode("utf-8","ignore").strip()
+            else:
+                f.seek(pos+s)
+        elif eid==BLOCKDUR:
+            duration = int.from_bytes(f.read(s), "big")
         else:
             f.seek(s,1)
-    return out
+    if txt and t_rel is not None:
+        start = base + t_rel
+        if duration:
+            return [(start, txt, start + duration)]
+        return [(start, txt)]
+    return []
