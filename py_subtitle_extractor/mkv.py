@@ -66,22 +66,34 @@ def _parse_track_entry(data: bytes) -> dict:
         elif eid==TRACKNAME:   info["name"]=v.decode("utf-8","ignore")
     return info
 
+import mmap
+
 def extract_subtitles(path: str, track: int) -> List[Tuple[int, str] | Tuple[int, str, int]]:
-    subs=[]
-    with open(path, "rb") as file:
-        with mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ) as f:
-            _, h = _read_header(f); f.seek(h,1)
-            eid, h = _read_header(f)
-            if eid!=SEGMENT:
-                return subs
-            seg_end=f.tell()+h
-            while f.tell()<seg_end:
-                eid, sz = _read_header(f)
-                if eid==CLUSTER:
-                    subs+=_parse_cluster(f,sz,track)
-                else:
-                    f.seek(sz,1)
+    subs = []
+    try:
+        with open(path, "rb") as file:
+            with mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ) as f:
+                return _extract_subtitles_from(f, track)
+    except (ValueError, OSError) as e:
+        # mmap fallback
+        with open(path, "rb") as f:
+            return _extract_subtitles_from(f, track)
     return subs
+
+def _extract_subtitles_from(f: BinaryIO, track: int) -> List[Tuple[int, str] | Tuple[int, str, int]]:
+    subs = []
+    _, h = _read_header(f); f.seek(h, 1)
+    eid, h = _read_header(f)
+    if eid != SEGMENT:
+        return subs
+    seg_end = f.tell() + h
+    while f.tell() < seg_end:
+        eid, sz = _read_header(f)
+        if eid == CLUSTER:
+            subs += _parse_cluster(f, sz, track)
+        else:
+            f.seek(sz, 1)
+    return subs 
 
 def _parse_cluster(f: BinaryIO, size: int, track: int) -> List[Tuple[int, str] | Tuple[int, str, int]]:
     end=f.tell()+size
