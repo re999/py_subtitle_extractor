@@ -1,4 +1,4 @@
-from typing import List, Tuple, Union
+from typing import List, Tuple, Union, Optional, Callable
 
 def format_timestamp(ms: int) -> str:
     h = ms // 3600000
@@ -7,9 +7,9 @@ def format_timestamp(ms: int) -> str:
     ms = ms % 1000
     return f"{h:02}:{m:02}:{s:02},{ms:03}"
 
-def extract_subtitles_as_srt(path: str, track: int) -> str:
+def extract_subtitles_as_srt(path: str, track: int, on_progress: Optional[Callable[[float], None]] = None) -> str:
     from .mkv import extract_subtitles
-    entries = extract_subtitles(path, track)
+    entries = extract_subtitles(path, track, on_progress)
     result = []
     DEFAULT_DURATION = 3000
 

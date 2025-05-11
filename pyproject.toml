@@ -1,6 +1,6 @@
 [project]
 name = "py_subtitle_extractor"
-version = "1.0.4"
+version = "1.0.5"
 description = "Pure-Python MKV subtitle extractor"
 readme = "README.md"
 requires-python = ">=3.8"
